@@ -226,7 +226,8 @@ func run(ctx context.Context, opts *StartOptions, log logr.Logger) error {
 			log.Info("using image from arguments", "image", userSpecifiedImage)
 			return userSpecifiedImage, nil
 		}
-		me := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: opts.Namespace, Name: opts.PodName}}
+		operatorPodName := os.Getenv("MY_NAME")
+		me := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: opts.Namespace, Name: operatorPodName}}
 		if err := mgr.GetAPIReader().Get(ctx, crclient.ObjectKeyFromObject(me), me); err != nil {
 			return "", fmt.Errorf("failed to get operator pod %s: %w", crclient.ObjectKeyFromObject(me), err)
 		}
