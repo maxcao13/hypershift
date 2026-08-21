@@ -125,7 +125,12 @@ func GetHCP(ctx context.Context, c client.Client, namespace string) (*hyperv1.Ho
 
 // KarpenterNodePoolName returns the name of the Karpenter NodePool for a given OpenshiftEC2NodeClass
 func KarpenterNodePoolName(oec2nc *hyperkarpenterv1.OpenshiftEC2NodeClass) string {
-	return fmt.Sprintf("%s-%s", oec2nc.Name, "karpenter")
+	return KarpenterNodePoolNameFromNodeClassName(oec2nc.Name)
+}
+
+// KarpenterNodePoolNameFromNodeClassName returns the synthetic NodePool name used for ignition token generation.
+func KarpenterNodePoolNameFromNodeClassName(nodeClassName string) string {
+	return fmt.Sprintf("%s-%s", nodeClassName, "karpenter")
 }
 
 // ArchToAMILabelKey returns a label key to store the AMI ID for the given architecture.

@@ -31,6 +31,8 @@ import (
 
 	awskarpenterapis "github.com/aws/karpenter-provider-aws/pkg/apis"
 	awskarpenterv1 "github.com/aws/karpenter-provider-aws/pkg/apis/v1"
+	azurekarpenterapis "github.com/Azure/karpenter-provider-azure/pkg/apis"
+	azurekarpenterv1beta1 "github.com/Azure/karpenter-provider-azure/pkg/apis/v1beta1"
 
 	batchv1 "k8s.io/api/batch/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -175,6 +177,13 @@ func init() {
 		scheme.AddKnownTypes(awsKarpenterGroupVersion,
 			&awskarpenterv1.EC2NodeClass{},
 			&awskarpenterv1.EC2NodeClassList{},
+		)
+
+		azureKarpenterGroupVersion := schema.GroupVersion{Group: azurekarpenterapis.Group, Version: "v1beta1"}
+		metav1.AddToGroupVersion(scheme, azureKarpenterGroupVersion)
+		scheme.AddKnownTypes(azureKarpenterGroupVersion,
+			&azurekarpenterv1beta1.AKSNodeClass{},
+			&azurekarpenterv1beta1.AKSNodeClassList{},
 		)
 
 		_ = hyperkarpenterv1.AddToScheme(scheme)

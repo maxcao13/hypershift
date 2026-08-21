@@ -594,7 +594,7 @@ func enforceImagePullPolicy(containers []corev1.Container) error {
 		if strings.HasSuffix(containers[i].Image, ":latest") {
 			containers[i].ImagePullPolicy = corev1.PullAlways
 		} else {
-			containers[i].ImagePullPolicy = corev1.PullIfNotPresent
+			containers[i].ImagePullPolicy = corev1.PullAlways
 		}
 	}
 	return nil

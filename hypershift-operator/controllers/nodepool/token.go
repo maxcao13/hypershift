@@ -397,11 +397,16 @@ func (t *Token) reconcileUserDataSecret(log logr.Logger, userDataSecret *corev1.
 	if karpenterutil.IsKarpenterEnabled(t.hostedCluster.Spec.AutoNode) {
 		npLabels := t.nodePool.GetLabels()
 		if npLabels != nil && npLabels[karpenterutil.ManagedByKarpenterLabel] == "true" {
-			err := setKarpenterAMILabels(log, userDataSecret, t.hostedCluster.Spec.Platform.AWS.Region, t.releaseImage, t.hostedCluster.Spec.Platform.Type, t.resolvedRHELStreamForBootImage)
-			if err != nil {
-				return err
-			}
 			userDataSecret.Labels[karpenterutil.ManagedByKarpenterLabel] = "true"
+			if t.hostedCluster.Spec.Platform.Type == hyperv1.AWSPlatform {
+				if t.hostedCluster.Spec.Platform.AWS == nil {
+					return fmt.Errorf("aws platform spec is required to set karpenter AMI labels")
+				}
+				err := setKarpenterAMILabels(log, userDataSecret, t.hostedCluster.Spec.Platform.AWS.Region, t.releaseImage, t.hostedCluster.Spec.Platform.Type, t.resolvedRHELStreamForBootImage)
+				if err != nil {
+					return err
+				}
+			}
 		}
 	}
 

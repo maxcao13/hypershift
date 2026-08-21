@@ -38,7 +38,7 @@ import (
 )
 
 func (r *HostedClusterReconciler) reconcileKarpenterOperator(cpContext controlplanecomponent.ControlPlaneContext, hcluster *hyperv1.HostedCluster, hypershiftOperatorImage, controlPlaneOperatorImage string) error {
-	// The taint ConfigMap (set-karpenter-taint) is created by the karpenter-operator itself.
+	// The taint ConfigMap (set-karpenter-taint) is created by the karpenter ignition controller.
 
 	if !karpenterutil.IsKarpenterEnabled(hcluster.Spec.AutoNode) {
 

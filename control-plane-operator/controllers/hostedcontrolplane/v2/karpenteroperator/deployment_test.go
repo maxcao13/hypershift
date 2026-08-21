@@ -268,7 +268,7 @@ func TestAdaptStandaloneDeployment(t *testing.T) {
 		rhobsEnabled   bool
 		hcpAnnotations map[string]string
 		images         map[string]string
-		validateFunc   func(t *testing.T, g Gomega, cpContext controlplanecomponent.WorkloadContext)
+		validateFunc   func(t *testing.T, g Gomega, opts *KarpenterOperatorOptions, cpContext controlplanecomponent.WorkloadContext)
 	}{
 		{
 			name:         "When platform is AWS, it should configure AWS-specific env vars and karpenter image",
@@ -278,12 +278,12 @@ func TestAdaptStandaloneDeployment(t *testing.T) {
 			images: map[string]string{
 				"aws-karpenter-provider-aws": "quay.io/openshift/karpenter-aws:latest",
 			},
-			validateFunc: func(t *testing.T, g Gomega, cpContext controlplanecomponent.WorkloadContext) {
+			validateFunc: func(t *testing.T, g Gomega, opts *KarpenterOperatorOptions, cpContext controlplanecomponent.WorkloadContext) {
 				t.Helper()
 				deploymentObj, err := assets.LoadDeploymentManifest(ComponentName)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				err = adaptStandaloneDeployment(cpContext, deploymentObj)
+				err = opts.adaptStandaloneDeployment(cpContext, deploymentObj)
 				g.Expect(err).ToNot(HaveOccurred())
 
 				container := podspec.FindContainer(ComponentName, deploymentObj.Spec.Template.Spec.Containers)
@@ -319,12 +319,12 @@ func TestAdaptStandaloneDeployment(t *testing.T) {
 			images: map[string]string{
 				"azure-karpenter-provider-azure": "quay.io/openshift/karpenter-azure:latest",
 			},
-			validateFunc: func(t *testing.T, g Gomega, cpContext controlplanecomponent.WorkloadContext) {
+			validateFunc: func(t *testing.T, g Gomega, opts *KarpenterOperatorOptions, cpContext controlplanecomponent.WorkloadContext) {
 				t.Helper()
 				deploymentObj, err := assets.LoadDeploymentManifest(ComponentName)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				err = adaptStandaloneDeployment(cpContext, deploymentObj)
+				err = opts.adaptStandaloneDeployment(cpContext, deploymentObj)
 				g.Expect(err).ToNot(HaveOccurred())
 
 				container := podspec.FindContainer(ComponentName, deploymentObj.Spec.Template.Spec.Containers)
@@ -361,12 +361,12 @@ func TestAdaptStandaloneDeployment(t *testing.T) {
 			images: map[string]string{
 				"aws-karpenter-provider-aws": "quay.io/openshift/karpenter-aws:latest",
 			},
-			validateFunc: func(t *testing.T, g Gomega, cpContext controlplanecomponent.WorkloadContext) {
+			validateFunc: func(t *testing.T, g Gomega, opts *KarpenterOperatorOptions, cpContext controlplanecomponent.WorkloadContext) {
 				t.Helper()
 				deploymentObj, err := assets.LoadDeploymentManifest(ComponentName)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				err = adaptStandaloneDeployment(cpContext, deploymentObj)
+				err = opts.adaptStandaloneDeployment(cpContext, deploymentObj)
 				g.Expect(err).ToNot(HaveOccurred())
 
 				container := podspec.FindContainer(ComponentName, deploymentObj.Spec.Template.Spec.Containers)
@@ -385,12 +385,12 @@ func TestAdaptStandaloneDeployment(t *testing.T) {
 			images: map[string]string{
 				"aws-karpenter-provider-aws": "quay.io/openshift/karpenter-aws:latest",
 			},
-			validateFunc: func(t *testing.T, g Gomega, cpContext controlplanecomponent.WorkloadContext) {
+			validateFunc: func(t *testing.T, g Gomega, opts *KarpenterOperatorOptions, cpContext controlplanecomponent.WorkloadContext) {
 				t.Helper()
 				deploymentObj, err := assets.LoadDeploymentManifest(ComponentName)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				err = adaptStandaloneDeployment(cpContext, deploymentObj)
+				err = opts.adaptStandaloneDeployment(cpContext, deploymentObj)
 				g.Expect(err).ToNot(HaveOccurred())
 
 				container := podspec.FindContainer(ComponentName, deploymentObj.Spec.Template.Spec.Containers)
@@ -410,12 +410,12 @@ func TestAdaptStandaloneDeployment(t *testing.T) {
 				"karpenter-operator":         "quay.io/openshift/karpenter-operator:latest",
 				"aws-karpenter-provider-aws": "quay.io/openshift/karpenter-aws:latest",
 			},
-			validateFunc: func(t *testing.T, g Gomega, cpContext controlplanecomponent.WorkloadContext) {
+			validateFunc: func(t *testing.T, g Gomega, opts *KarpenterOperatorOptions, cpContext controlplanecomponent.WorkloadContext) {
 				t.Helper()
 				deploymentObj, err := assets.LoadDeploymentManifest(ComponentName)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				err = adaptStandaloneDeployment(cpContext, deploymentObj)
+				err = opts.adaptStandaloneDeployment(cpContext, deploymentObj)
 				g.Expect(err).ToNot(HaveOccurred())
 
 				container := podspec.FindContainer(ComponentName, deploymentObj.Spec.Template.Spec.Containers)
@@ -432,12 +432,12 @@ func TestAdaptStandaloneDeployment(t *testing.T) {
 				"karpenter-operator":         "quay.io/openshift/karpenter-operator:latest",
 				"aws-karpenter-provider-aws": "quay.io/openshift/karpenter-aws:latest",
 			},
-			validateFunc: func(t *testing.T, g Gomega, cpContext controlplanecomponent.WorkloadContext) {
+			validateFunc: func(t *testing.T, g Gomega, opts *KarpenterOperatorOptions, cpContext controlplanecomponent.WorkloadContext) {
 				t.Helper()
 				deploymentObj, err := assets.LoadDeploymentManifest(ComponentName)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				err = adaptStandaloneDeployment(cpContext, deploymentObj)
+				err = opts.adaptStandaloneDeployment(cpContext, deploymentObj)
 				g.Expect(err).ToNot(HaveOccurred())
 
 				container := podspec.FindContainer(ComponentName, deploymentObj.Spec.Template.Spec.Containers)
@@ -457,12 +457,12 @@ func TestAdaptStandaloneDeployment(t *testing.T) {
 				"karpenter-operator":         "quay.io/openshift/karpenter-operator:latest",
 				"aws-karpenter-provider-aws": "quay.io/openshift/karpenter-aws:latest",
 			},
-			validateFunc: func(t *testing.T, g Gomega, cpContext controlplanecomponent.WorkloadContext) {
+			validateFunc: func(t *testing.T, g Gomega, opts *KarpenterOperatorOptions, cpContext controlplanecomponent.WorkloadContext) {
 				t.Helper()
 				deploymentObj, err := assets.LoadDeploymentManifest(ComponentName)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				err = adaptStandaloneDeployment(cpContext, deploymentObj)
+				err = opts.adaptStandaloneDeployment(cpContext, deploymentObj)
 				g.Expect(err).ToNot(HaveOccurred())
 
 				container := podspec.FindContainer(ComponentName, deploymentObj.Spec.Template.Spec.Containers)
@@ -528,13 +528,20 @@ func TestAdaptStandaloneDeployment(t *testing.T) {
 				}
 			}
 
+			opts := &KarpenterOperatorOptions{
+				HyperShiftOperatorImage:            "quay.io/hypershift/operator:latest",
+				ControlPlaneOperatorImage:          "quay.io/hypershift/cpo:latest",
+				IgnitionEndpoint:                   "https://ignition.example.com",
+				StandaloneKarpenterOperatorEnabled: true,
+			}
+
 			cpContext := controlplanecomponent.WorkloadContext{
 				Context:              t.Context(),
 				HCP:                  hcp,
 				ReleaseImageProvider: &fakeReleaseImageProvider{images: tc.images},
 			}
 
-			tc.validateFunc(t, g, cpContext)
+			tc.validateFunc(t, g, opts, cpContext)
 		})
 	}
 }

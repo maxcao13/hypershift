@@ -15,6 +15,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
@@ -26,11 +27,13 @@ const (
 	KarpenterImageAzureEnvVar = "KARPENTER_IMAGE_AZURE"
 	// TokenMinterImageEnvVar is the environment variable that sets the Token Minter image.
 	TokenMinterImageEnvVar = "TOKEN_MINTER_IMAGE"
+	// karpenterAdapterContainerName is the guest-cluster-facing karpenter-operator from the hypershift image.
+	karpenterAdapterContainerName = "karpenter-adapter"
 )
 
 func (karp *KarpenterOperatorOptions) adaptDeployment(cpContext component.WorkloadContext, deployment *appsv1.Deployment) error {
 	if karp.StandaloneKarpenterOperatorEnabled {
-		return adaptStandaloneDeployment(cpContext, deployment)
+		return karp.adaptStandaloneDeployment(cpContext, deployment)
 	}
 
 	hcp := cpContext.HCP
@@ -40,6 +43,7 @@ func (karp *KarpenterOperatorOptions) adaptDeployment(cpContext component.Worklo
 		c.Args = append(c.Args,
 			"--hypershift-operator-image="+karp.HyperShiftOperatorImage,
 			"--ignition-endpoint="+karp.IgnitionEndpoint,
+			"--platform="+string(hcp.Spec.Platform.Type),
 		)
 		proxy.SetEnvVars(&c.Env)
 	})
@@ -95,7 +99,7 @@ func (karp *KarpenterOperatorOptions) adaptDeployment(cpContext component.Worklo
 }
 
 // adaptStandaloneDeployment configures the deployment for the standalone karpenter-operator binary.
-func adaptStandaloneDeployment(cpContext component.WorkloadContext, deployment *appsv1.Deployment) error {
+func (karp *KarpenterOperatorOptions) adaptStandaloneDeployment(cpContext component.WorkloadContext, deployment *appsv1.Deployment) error {
 	hcp := cpContext.HCP
 
 	platformType := string(hcp.Spec.Platform.Type)
@@ -141,7 +145,7 @@ func adaptStandaloneDeployment(cpContext component.WorkloadContext, deployment *
 			corev1.EnvVar{
 				Name: KarpenterImageAzureEnvVar,
 				// Value: cpContext.ReleaseImageProvider.GetImage("azure-karpenter-provider-azure"),
-				Value: "quay.io/macao/karpenter-provider-azure:latest",
+				Value: "quay.io/macao/karpenter-provider-azure:aro-karpenter-demo",
 			},
 			corev1.EnvVar{
 				Name:  "AZURE_CLIENT_ID",
@@ -204,7 +208,6 @@ func adaptStandaloneDeployment(cpContext component.WorkloadContext, deployment *
 		if override, exists := hcp.Annotations[hyperkarpenterv1.KarpenterOperatorImage]; exists && override != "" {
 			c.Image = override
 		}
-		c.ImagePullPolicy = corev1.PullAlways
 		c.VolumeMounts = append(c.VolumeMounts,
 			corev1.VolumeMount{
 				Name:      "provider-creds",
@@ -234,5 +237,61 @@ func adaptStandaloneDeployment(cpContext component.WorkloadContext, deployment *
 		)
 	})
 
+	// Guest-cluster-facing controllers from hypershift/karpenter-operator run in a separate container
+	// while the standalone payload operator manages management-cluster operands.
+	deployment.Spec.Template.Spec.Containers = append(
+		deployment.Spec.Template.Spec.Containers,
+		karp.buildKarpenterAdapterContainer(hcp),
+	)
+
 	return nil
+}
+
+func karpenterAdapterContainer() *corev1.Container {
+	return &corev1.Container{
+		Name: karpenterAdapterContainerName,
+	}
+}
+
+func (karp *KarpenterOperatorOptions) buildKarpenterAdapterContainer(hcp *hyperv1.HostedControlPlane) corev1.Container {
+	platformType := string(hcp.Spec.Platform.Type)
+	adapterArgs := []string{
+		"--target-kubeconfig=/mnt/kubeconfig/target-kubeconfig",
+		"--namespace=" + hcp.Namespace,
+		"--hypershift-operator-image=" + karp.HyperShiftOperatorImage,
+		"--ignition-endpoint=" + karp.IgnitionEndpoint,
+		"--enable-standalone-karpenter-operator=true",
+		"--platform=" + platformType,
+	}
+
+	env := []corev1.EnvVar{
+		{
+			Name:  "KUBE_FEATURE_WatchListClient",
+			Value: "false",
+		},
+	}
+
+	volumeMounts := []corev1.VolumeMount{
+		{
+			Name:      "target-kubeconfig",
+			MountPath: "/mnt/kubeconfig",
+		},
+	}
+
+	proxy.SetEnvVars(&env)
+
+	return podspec.BuildContainer(karpenterAdapterContainer(), func(c *corev1.Container) {
+		// c.Image = karp.HyperShiftOperatorImage
+		c.Image = "quay.io/macao/hypershift:aro-karpenter-demo"
+		c.Command = []string{"/usr/bin/karpenter-operator"}
+		c.Args = adapterArgs
+		c.Env = env
+		c.VolumeMounts = volumeMounts
+		c.Resources = corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("10m"),
+				corev1.ResourceMemory: resource.MustParse("60Mi"),
+			},
+		}
+	})
 }

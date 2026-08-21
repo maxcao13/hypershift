@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	hypershiftclient "github.com/openshift/hypershift/client/clientset/clientset"
+	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"github.com/openshift/hypershift/karpenter-operator/controllers/karpenter"
 	"github.com/openshift/hypershift/karpenter-operator/controllers/karpenterignition"
 	"github.com/openshift/hypershift/karpenter-operator/controllers/nodeclass"
@@ -25,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/spf13/cobra"
 )
@@ -32,12 +35,14 @@ import (
 var (
 	setupLog = ctrl.Log.WithName("setup")
 
-	targetKubeconfig          string
-	namespace                 string
-	controlPlaneOperatorImage string
-	hypershiftOperatorImage   string
-	ignitionEndpoint          string
-	registryOverrides         map[string]string
+	targetKubeconfig                  string
+	namespace                         string
+	controlPlaneOperatorImage         string
+	hypershiftOperatorImage           string
+	ignitionEndpoint                  string
+	registryOverrides                 map[string]string
+	enableStandaloneKarpenterOperator bool
+	platform                          string
 )
 
 func main() {
@@ -65,12 +70,8 @@ func main() {
 	rootCmd.PersistentFlags().StringVar(&hypershiftOperatorImage, "hypershift-operator-image", "", "The HyperShift operator image to use for token generation")
 	rootCmd.PersistentFlags().StringVar(&ignitionEndpoint, "ignition-endpoint", "", "The ignition server endpoint for node bootstrap")
 	rootCmd.PersistentFlags().StringToStringVar(&registryOverrides, "registry-overrides", map[string]string{}, "Registry overrides in format: sr1=dr1,sr2=dr2")
-
-	_ = rootCmd.MarkPersistentFlagRequired("target-kubeconfig")
-	_ = rootCmd.MarkPersistentFlagRequired("namespace")
-	_ = rootCmd.MarkPersistentFlagRequired("control-plane-operator-image")
-	_ = rootCmd.MarkPersistentFlagRequired("hypershift-operator-image")
-	_ = rootCmd.MarkPersistentFlagRequired("ignition-endpoint")
+	rootCmd.PersistentFlags().BoolVar(&enableStandaloneKarpenterOperator, "enable-standalone-karpenter-operator", false, "Run as a karpenter-adapter that only reconciles ignition and userData secrets for the standalone karpenter-operator")
+	rootCmd.PersistentFlags().StringVar(&platform, "platform", "", "Cloud platform (AWS or Azure)")
 
 	if err := rootCmd.Execute(); err != nil {
 		setupLog.Error(err, "problem executing command")
@@ -78,7 +79,54 @@ func main() {
 	}
 }
 
+func validateFlags() error {
+	var missing []string
+	if targetKubeconfig == "" {
+		missing = append(missing, "target-kubeconfig")
+	}
+	if namespace == "" {
+		missing = append(missing, "namespace")
+	}
+	if hypershiftOperatorImage == "" {
+		missing = append(missing, "hypershift-operator-image")
+	}
+	if ignitionEndpoint == "" {
+		missing = append(missing, "ignition-endpoint")
+	}
+	if !enableStandaloneKarpenterOperator && controlPlaneOperatorImage == "" {
+		missing = append(missing, "control-plane-operator-image")
+	}
+	if platform == "" {
+		missing = append(missing, "platform")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("required flag(s) not set: %s", strings.Join(missing, ", "))
+	}
+	if _, err := parsePlatform(platform); err != nil {
+		return err
+	}
+	return nil
+}
+
+func parsePlatform(platformValue string) (hyperv1.PlatformType, error) {
+	switch hyperv1.PlatformType(platformValue) {
+	case hyperv1.AWSPlatform, hyperv1.AzurePlatform:
+		return hyperv1.PlatformType(platformValue), nil
+	default:
+		return "", fmt.Errorf("unsupported platform %q, want AWS or Azure", platformValue)
+	}
+}
+
 func run(ctx context.Context) error {
+	if err := validateFlags(); err != nil {
+		return err
+	}
+
+	platformType, err := parsePlatform(platform)
+	if err != nil {
+		return err
+	}
+
 	managementKubeconfig, err := ctrl.GetConfig()
 	if err != nil {
 		return err
@@ -86,10 +134,12 @@ func run(ctx context.Context) error {
 
 	scheme := hyperapi.Scheme
 
-	awsKarpanterGroupVersion := schema.GroupVersion{Group: awskarpenterapis.Group, Version: "v1"}
-	metav1.AddToGroupVersion(scheme, awsKarpanterGroupVersion)
-	scheme.AddKnownTypes(awsKarpanterGroupVersion, &awskarpenterv1.EC2NodeClass{})
-	scheme.AddKnownTypes(awsKarpanterGroupVersion, &awskarpenterv1.EC2NodeClassList{})
+	if !enableStandaloneKarpenterOperator {
+		awsKarpanterGroupVersion := schema.GroupVersion{Group: awskarpenterapis.Group, Version: "v1"}
+		metav1.AddToGroupVersion(scheme, awsKarpanterGroupVersion)
+		scheme.AddKnownTypes(awsKarpanterGroupVersion, &awskarpenterv1.EC2NodeClass{})
+		scheme.AddKnownTypes(awsKarpanterGroupVersion, &awskarpenterv1.EC2NodeClassList{})
+	}
 
 	managementCluster, err := cluster.New(managementKubeconfig, func(opt *cluster.Options) {
 		opt.Cache = cache.Options{
@@ -107,9 +157,18 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("failed to create guest kubeconfig: %w", err)
 	}
 
+	metricsAddr := ":8080"
+	healthProbeAddr := ":8081"
+	if enableStandaloneKarpenterOperator {
+		metricsAddr = ":8082"     // 8080 is used by the standalone karpenter-operator
+		healthProbeAddr = ":8083" // 8081 is used by the standalone karpenter-operator
+	}
+
 	mgr, err := ctrl.NewManager(guestKubeconfig, ctrl.Options{
-		Scheme:         scheme,
-		LeaderElection: false,
+		Scheme:                 scheme,
+		LeaderElection:         false,
+		Metrics:                server.Options{BindAddress: metricsAddr},
+		HealthProbeBindAddress: healthProbeAddr,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create manager: %w", err)
@@ -119,33 +178,64 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("failed to add managementCluster to controller runtime manager: %w", err)
 	}
 
-	hypershiftClient, err := hypershiftclient.NewForConfig(managementKubeconfig)
-	if err != nil {
-		return fmt.Errorf("failed to create hypershift client: %w", err)
+	if !enableStandaloneKarpenterOperator {
+		hypershiftClient, err := hypershiftclient.NewForConfig(managementKubeconfig)
+		if err != nil {
+			return fmt.Errorf("failed to create hypershift client: %w", err)
+		}
+
+		r := karpenter.Reconciler{
+			Namespace:                 namespace,
+			ControlPlaneOperatorImage: controlPlaneOperatorImage,
+			ReleaseProvider:           &releaseinfo.RegistryClientProvider{},
+			HypershiftClient:          hypershiftClient,
+		}
+		if err := r.SetupWithManager(ctx, mgr, managementCluster); err != nil {
+			return fmt.Errorf("failed to setup controller with manager: %w", err)
+		}
+
+		mac := karpenter.MachineApproverController{}
+		if err := mac.SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("failed to setup controller with manager: %w", err)
+		}
+
+		encr := nodeclass.EC2NodeClassReconciler{
+			Namespace: namespace,
+		}
+		if err := encr.SetupWithManager(ctx, mgr, managementCluster); err != nil {
+			return fmt.Errorf("failed to setup controller with manager: %w", err)
+		}
 	}
 
-	r := karpenter.Reconciler{
-		Namespace:                 namespace,
-		ControlPlaneOperatorImage: controlPlaneOperatorImage,
-		ReleaseProvider:           &releaseinfo.RegistryClientProvider{},
-		HypershiftClient:          hypershiftClient,
+	releaseProvider, imageMetaDataProvider := buildReleaseProviders()
+
+	kir := karpenterignition.KarpenterIgnitionReconciler{
+		ReleaseProvider:         releaseProvider,
+		VersionResolver:         releaseinfo.NewCincinnatiVersionResolver(),
+		ImageMetadataProvider:   imageMetaDataProvider,
+		HypershiftOperatorImage: hypershiftOperatorImage,
+		IgnitionEndpoint:        ignitionEndpoint,
+		Namespace:               namespace,
+		Platform:                platformType,
 	}
-	if err := r.SetupWithManager(ctx, mgr, managementCluster); err != nil {
-		return fmt.Errorf("failed to setup controller with manager: %w", err)
+	if err := kir.SetupWithManager(mgr, managementCluster); err != nil {
+		return fmt.Errorf("failed to setup karpenter ignition controller with manager: %w", err)
 	}
 
-	mac := karpenter.MachineApproverController{}
-	if err := mac.SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("failed to setup controller with manager: %w", err)
+	if !enableStandaloneKarpenterOperator {
+		if err := setupOperatorInfoMetric(managementCluster); err != nil {
+			return fmt.Errorf("failed to setup operator info metric: %w", err)
+		}
 	}
 
-	encr := nodeclass.EC2NodeClassReconciler{
-		Namespace: namespace,
-	}
-	if err := encr.SetupWithManager(ctx, mgr, managementCluster); err != nil {
-		return fmt.Errorf("failed to setup controller with manager: %w", err)
+	if err := mgr.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start manager: %w", err)
 	}
 
+	return nil
+}
+
+func buildReleaseProviders() (releaseinfo.Provider, util.ImageMetadataProvider) {
 	imageRegistryOverrides := map[string][]string{}
 	openShiftImgOverrides, ok := os.LookupEnv("OPENSHIFT_IMG_OVERRIDES")
 	if ok {
@@ -175,27 +265,7 @@ func run(ctx context.Context) error {
 		OpenShiftImageRegistryOverrides: imageRegistryOverrides,
 	}
 
-	kir := karpenterignition.KarpenterIgnitionReconciler{
-		ReleaseProvider:         releaseProvider,
-		VersionResolver:         releaseinfo.NewCincinnatiVersionResolver(),
-		ImageMetadataProvider:   imageMetaDataProvider,
-		HypershiftOperatorImage: hypershiftOperatorImage,
-		IgnitionEndpoint:        ignitionEndpoint,
-		Namespace:               namespace,
-	}
-	if err := kir.SetupWithManager(mgr, managementCluster); err != nil {
-		return fmt.Errorf("failed to setup karpenter ignition controller with manager: %w", err)
-	}
-
-	if err := setupOperatorInfoMetric(managementCluster); err != nil {
-		return fmt.Errorf("failed to setup operator info metric: %w", err)
-	}
-
-	if err := mgr.Start(ctx); err != nil {
-		return fmt.Errorf("failed to start manager: %w", err)
-	}
-
-	return nil
+	return releaseProvider, imageMetaDataProvider
 }
 
 func kubeconfigFromFile(path string) (*rest.Config, error) {
