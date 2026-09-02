@@ -61,6 +61,7 @@ import (
 	"github.com/openshift/hypershift/support/globalconfig"
 	"github.com/openshift/hypershift/support/infraid"
 	"github.com/openshift/hypershift/support/k8sutil"
+	karpenterutil "github.com/openshift/hypershift/support/karpenter"
 	"github.com/openshift/hypershift/support/metrics"
 	"github.com/openshift/hypershift/support/netutil"
 	"github.com/openshift/hypershift/support/oidc"
@@ -1503,6 +1504,10 @@ func (r *HostedClusterReconciler) reconcile(ctx context.Context, req ctrl.Reques
 
 	report.execute("AdditionalTrustBundle", nonCritical, func() error {
 		return r.reconcileAdditionalTrustBundle(ctx, hcluster, createOrUpdate, controlPlaneNamespace.Name)
+	})
+
+	report.execute("TuningConfigSync", nonCritical, func() error {
+		return r.reconcileTuningConfigSync(ctx, hcluster, createOrUpdate, controlPlaneNamespace.Name)
 	})
 
 	if hcluster.Spec.ServiceAccountSigningKey != nil {
@@ -4064,6 +4069,7 @@ func (r *HostedClusterReconciler) delete(ctx context.Context, hc *hyperv1.Hosted
 	return true, nil
 }
 
+//nolint:gocyclo
 func enqueueHostedClustersFunc(metricsSet metrics.MetricsSet, operatorNamespace string, c client.Client) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		log := ctrllog.Log
@@ -4106,6 +4112,26 @@ func enqueueHostedClustersFunc(metricsSet metrics.MetricsSet, operatorNamespace 
 						hc.Spec.Monitoring.MetricsForwarding.MetricsSet == hyperv1.MetricsSetSRE {
 						requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: hc.Name, Namespace: hc.Namespace}})
 					}
+				}
+				return requests
+			}
+			if typedObj.Labels[karpenterutil.ManagedByKarpenterLabel] == "true" {
+				if _, ok := typedObj.Data[tuningConfigDataKey]; !ok {
+					return handleDefault(typedObj)
+				}
+				hcList := &hyperv1.HostedClusterList{}
+				if err := c.List(ctx, hcList, client.InNamespace(typedObj.Namespace)); err != nil {
+					log.Error(err, "failed to list hosted clusters for karpenter tuning configmap event")
+					return handleDefault(typedObj)
+				}
+				requests := make([]reconcile.Request, 0, len(hcList.Items))
+				for _, hc := range hcList.Items {
+					if !karpenterutil.IsKarpenterEnabled(hc.Spec.AutoNode) {
+						continue
+					}
+					requests = append(requests, reconcile.Request{
+						NamespacedName: types.NamespacedName{Name: hc.Name, Namespace: hc.Namespace},
+					})
 				}
 				return requests
 			}

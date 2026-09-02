@@ -22,7 +22,8 @@ const (
 	// This allows time for Karpenter to delete all NodePools and NodeClaims before the HostedControlPlane is deleted.
 	KarpenterFinalizer = "hypershift.openshift.io/karpenter-finalizer"
 
-	// ManagedByKarpenterLabel is a label set on the userData secrets as being managed by Karpenter Operator
+	// ManagedByKarpenterLabel marks objects owned by the Karpenter ignition path, including userData secrets,
+	// and tuning ConfigMaps in the HostedCluster namespace that should be mirrored into HCP namespaces.
 	ManagedByKarpenterLabel = "hypershift.openshift.io/managed-by-karpenter"
 
 	// KarpenterNodeClassKubeletConfigLabel is a label set on per-OpenshiftEC2NodeClass KubeletConfig ConfigMaps

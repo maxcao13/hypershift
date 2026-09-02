@@ -12,6 +12,7 @@ import (
 	"github.com/openshift/hypershift/support/api"
 	controlplanecomponent "github.com/openshift/hypershift/support/controlplane-component"
 	karpenterutil "github.com/openshift/hypershift/support/karpenter"
+	"github.com/openshift/hypershift/support/upsert"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -459,6 +460,82 @@ func TestReconcileAutoNodeEnabledCondition(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReconcileTuningConfigSync(t *testing.T) {
+	const (
+		hcNamespace  = "clusters"
+		hcName       = "test-cluster"
+		hcpNamespace = "clusters-test-cluster"
+		clusterRef   = "clusters/test-cluster"
+	)
+
+	hcluster := &hyperv1.HostedCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      hcName,
+			Namespace: hcNamespace,
+		},
+		Spec: hyperv1.HostedClusterSpec{
+			ClusterID: "test",
+			AutoNode:  autoNode,
+		},
+	}
+	unlabeledTuned := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "np-tuned",
+			Namespace: hcNamespace,
+		},
+		Data: map[string]string{tuningConfigDataKey: "tuned: true"},
+	}
+	karpenterTuned := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "karpenter-tuned",
+			Namespace: hcNamespace,
+			Labels: map[string]string{
+				karpenterutil.ManagedByKarpenterLabel: "true",
+			},
+		},
+		Data: map[string]string{tuningConfigDataKey: "tuned: true"},
+	}
+	staleMirror := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "stale-tuned",
+			Namespace: hcpNamespace,
+			Labels: map[string]string{
+				mirroredTuningConfigLabel:             "true",
+				karpenterutil.ManagedByKarpenterLabel: "true",
+			},
+		},
+		Data: map[string]string{tuningConfigDataKey: "tuned: true"},
+	}
+
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(api.Scheme).
+		WithObjects(hcluster, unlabeledTuned, karpenterTuned, staleMirror).
+		Build()
+	r := &HostedClusterReconciler{Client: fakeClient}
+	createOrUpdate := upsert.New(false).CreateOrUpdate
+
+	g.Expect(r.reconcileTuningConfigSync(ctx, hcluster, createOrUpdate, hcpNamespace)).To(Succeed())
+
+	got := &corev1.ConfigMap{}
+	g.Expect(fakeClient.Get(ctx, crclient.ObjectKey{Namespace: hcpNamespace, Name: "karpenter-tuned"}, got)).To(Succeed(),
+		"expected mirrored configmap karpenter-tuned to exist")
+	g.Expect(got.Labels[mirroredTuningConfigLabel]).To(Equal("true"),
+		"mirrored configmap should have mirrored label")
+	g.Expect(got.Annotations["hypershift.openshift.io/cluster"]).To(Equal(clusterRef),
+		"mirrored configmap should have cluster annotation")
+
+	unmirrored := &corev1.ConfigMap{}
+	err := fakeClient.Get(ctx, crclient.ObjectKey{Namespace: hcpNamespace, Name: "np-tuned"}, unmirrored)
+	g.Expect(err).To(HaveOccurred(), "unlabeled configmap should not be mirrored")
+
+	stale := &corev1.ConfigMap{}
+	err = fakeClient.Get(ctx, crclient.ObjectKey{Namespace: hcpNamespace, Name: "stale-tuned"}, stale)
+	g.Expect(err).To(HaveOccurred(), "stale mirrored configmap should be deleted")
 }
 
 func TestReconcileKarpenterOperator(t *testing.T) {
