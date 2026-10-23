@@ -237,14 +237,23 @@ func (o *CreateInfraOptions) createNetworkResources(ctx context.Context, l logr.
 
 func (o *CreateInfraOptions) handleIdentitiesAndRBAC(ctx context.Context, rbacMgr *RBACManager, result *CreateInfraOutput, resourceGroupName, nsgResourceGroupName, vnetResourceGroupName string) error {
 	if o.ManagedIdentitiesFile != "" {
-		result.ControlPlaneMIs = &hyperv1.AzureResourceManagedIdentities{}
 		managedIdentitiesRaw, err := os.ReadFile(o.ManagedIdentitiesFile)
 		if err != nil {
 			return fmt.Errorf("failed to read --managed-identities-file %s: %w", o.ManagedIdentitiesFile, err)
 		}
-		if err := yaml.Unmarshal(managedIdentitiesRaw, &result.ControlPlaneMIs.ControlPlane); err != nil {
+		// ARO-style control-plane components use Key Vault credentials, but Karpenter
+		// uses federation. Accept its client ID here because --managed-identities-file
+		// and --workload-identities-file are mutually exclusive. Keep it outside the
+		// certificate-based ControlPlaneManagedIdentities API.
+		var identities struct {
+			hyperv1.ControlPlaneManagedIdentities
+			KarpenterClientID string `json:"karpenterClientID,omitempty"`
+		}
+		if err := yaml.Unmarshal(managedIdentitiesRaw, &identities); err != nil {
 			return fmt.Errorf("failed to unmarshal --managed-identities-file: %w", err)
 		}
+		result.ControlPlaneMIs = &hyperv1.AzureResourceManagedIdentities{ControlPlane: identities.ControlPlaneManagedIdentities}
+		result.KarpenterClientID = identities.KarpenterClientID
 		if o.AssignServicePrincipalRoles {
 			if err := rbacMgr.AssignControlPlaneRoles(ctx, o, result.ControlPlaneMIs, resourceGroupName, nsgResourceGroupName, vnetResourceGroupName); err != nil {
 				return err
@@ -272,27 +281,24 @@ func (o *CreateInfraOptions) handleIdentitiesAndRBAC(ctx context.Context, rbacMg
 		if err != nil {
 			return fmt.Errorf("failed to read --workload-identities-file %s: %w", o.WorkloadIdentitiesFile, err)
 		}
-		if err := json.Unmarshal(workloadIdentitiesRaw, &result.WorkloadIdentities); err != nil {
+		var identities IAMOutput
+		if err := json.Unmarshal(workloadIdentitiesRaw, &identities); err != nil {
 			return fmt.Errorf("failed to unmarshal --workload-identities-file: %w", err)
 		}
-		var iamExtra struct {
-			KMSClientID       string `json:"kmsClientID,omitempty"`
-			KarpenterClientID string `json:"karpenterClientID,omitempty"`
-		}
-		if err := json.Unmarshal(workloadIdentitiesRaw, &iamExtra); err == nil {
-			result.KMSClientID = iamExtra.KMSClientID
-			result.KarpenterClientID = iamExtra.KarpenterClientID
-		}
+		result.WorkloadIdentities = &identities.AzureWorkloadIdentities
+		result.KMSClientID = identities.KMSClientID
+		result.KarpenterClientID = identities.KarpenterClientID
 
 		if o.AssignServicePrincipalRoles {
 			if err := rbacMgr.AssignWorkloadIdentities(ctx, o, result.WorkloadIdentities, resourceGroupName, nsgResourceGroupName, vnetResourceGroupName); err != nil {
 				return err
 			}
-			if result.KarpenterClientID != "" {
-				if err := rbacMgr.AssignKarpenterRoles(ctx, o, result.KarpenterClientID, resourceGroupName, vnetResourceGroupName); err != nil {
-					return err
-				}
-			}
+		}
+	}
+
+	if o.AssignServicePrincipalRoles && result.KarpenterClientID != "" {
+		if err := rbacMgr.AssignKarpenterRoles(ctx, o, result.KarpenterClientID, resourceGroupName, vnetResourceGroupName); err != nil {
+			return err
 		}
 	}
 

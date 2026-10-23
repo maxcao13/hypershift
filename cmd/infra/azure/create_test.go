@@ -1,10 +1,99 @@
 package azure
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	. "github.com/onsi/gomega"
 )
+
+func TestHandleIdentitiesAndRBAC(t *testing.T) {
+	const clientID = "12345678-1234-1234-1234-123456789012"
+	tests := map[string]struct {
+		managed  string
+		workload string
+		wantID   string
+		wantKMS  string
+		wantErr  string
+	}{
+		"When managed identities include Karpenter, it should read its client ID": {
+			managed: `{"cloudProvider":{"clientID":"12345678-1234-1234-1234-123456789012"},"karpenterClientID":"12345678-1234-1234-1234-123456789012"}`,
+			wantID:  clientID,
+		},
+		"When managed identities use YAML, it should read component and Karpenter client IDs": {
+			managed: "cloudProvider:\n  clientID: " + clientID + "\nkarpenterClientID: " + clientID + "\n",
+			wantID:  clientID,
+		},
+		"When managed identities omit Karpenter, it should leave its client ID empty": {
+			managed: `{}`,
+		},
+		"When workload identities include Karpenter, it should read its client ID": {
+			workload: `{"cloudProvider":{"clientID":"12345678-1234-1234-1234-123456789012"},"karpenterClientID":"12345678-1234-1234-1234-123456789012","kmsClientID":"23456789-1234-1234-1234-123456789012"}`,
+			wantID:   clientID,
+			wantKMS:  "23456789-1234-1234-1234-123456789012",
+		},
+		"When workload identities omit Karpenter, it should leave its client ID empty": {
+			workload: `{}`,
+		},
+		"When the workload Karpenter client ID is not a string, it should return an error": {
+			workload: `{"karpenterClientID":{}}`,
+			wantErr:  "failed to unmarshal --workload-identities-file",
+		},
+		"When the workload KMS client ID is not a string, it should return an error": {
+			workload: `{"kmsClientID":{}}`,
+			wantErr:  "failed to unmarshal --workload-identities-file",
+		},
+		"When no identities are supplied, it should leave its client ID empty": {},
+		"When the Karpenter client ID is not a string, it should return an error": {
+			managed: `{"karpenterClientID":{}}`,
+			wantErr: "failed to unmarshal --managed-identities-file",
+		},
+		"When managed identities contain invalid JSON, it should return an error": {
+			managed: `{"`,
+			wantErr: "failed to unmarshal --managed-identities-file",
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			g := NewWithT(t)
+			opts := &CreateInfraOptions{}
+			if tc.managed != "" {
+				opts.ManagedIdentitiesFile = filepath.Join(t.TempDir(), "managed-identities.json")
+				g.Expect(os.WriteFile(opts.ManagedIdentitiesFile, []byte(tc.managed), 0600)).To(Succeed())
+			}
+			if tc.workload != "" {
+				opts.WorkloadIdentitiesFile = filepath.Join(t.TempDir(), "workload-identities.json")
+				g.Expect(os.WriteFile(opts.WorkloadIdentitiesFile, []byte(tc.workload), 0600)).To(Succeed())
+			}
+			result := &CreateInfraOutput{}
+			// A nil RBAC manager also checks that disabled role assignment makes no Azure calls.
+			err := opts.handleIdentitiesAndRBAC(context.Background(), nil, result, "cluster-rg", "nsg-rg", "vnet-rg")
+			if tc.wantErr != "" {
+				g.Expect(err).To(MatchError(ContainSubstring(tc.wantErr)))
+				return
+			}
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(result.KarpenterClientID).To(Equal(tc.wantID))
+			g.Expect(result.KMSClientID).To(Equal(tc.wantKMS))
+			if tc.workload != "" {
+				g.Expect(result.WorkloadIdentities).NotTo(BeNil())
+				g.Expect(result.ControlPlaneMIs).To(BeNil())
+				if tc.wantID != "" {
+					g.Expect(string(result.WorkloadIdentities.CloudProvider.ClientID)).To(Equal(clientID))
+				}
+			}
+			if tc.managed != "" {
+				g.Expect(result.ControlPlaneMIs).NotTo(BeNil())
+				g.Expect(result.WorkloadIdentities).To(BeNil())
+				if tc.wantID != "" {
+					g.Expect(string(result.ControlPlaneMIs.ControlPlane.CloudProvider.ClientID)).To(Equal(clientID))
+				}
+			}
+		})
+	}
+}
 
 func TestValidate(t *testing.T) {
 	tests := map[string]struct {
