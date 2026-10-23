@@ -63,8 +63,8 @@ var kubeletCheckerPodTemplate = func() *corev1.Pod {
 
 func TestKarpenter(t *testing.T) {
 	e2eutil.ShouldRunKarpenterTests(t)
-	if globalOpts.Platform != hyperv1.AWSPlatform {
-		t.Skip("test only supported on platform AWS")
+	if globalOpts.Platform != hyperv1.AWSPlatform && globalOpts.Platform != hyperv1.AzurePlatform {
+		t.Skip("test only supported on platforms AWS and Azure")
 	}
 	t.Parallel()
 
@@ -72,9 +72,14 @@ func TestKarpenter(t *testing.T) {
 	defer cancel()
 
 	clusterOpts := globalOpts.DefaultClusterOptions(t)
-	clusterOpts.AWSPlatform.AutoNode = true
-	clusterOpts.AWSPlatform.PublicOnly = false
-	clusterOpts.AWSPlatform.EndpointAccess = string(hyperv1.PublicAndPrivate)
+	switch globalOpts.Platform {
+	case hyperv1.AWSPlatform:
+		clusterOpts.AWSPlatform.AutoNode = true
+		clusterOpts.AWSPlatform.PublicOnly = false
+		clusterOpts.AWSPlatform.EndpointAccess = string(hyperv1.PublicAndPrivate)
+	case hyperv1.AzurePlatform:
+		clusterOpts.AzurePlatform.AutoNode = true
+	}
 
 	e2eutil.NewHypershiftTest(t, ctx, func(t *testing.T, g Gomega, mgtClient crclient.Client, hostedCluster *hyperv1.HostedCluster) {
 		guestClient := e2eutil.WaitForGuestClient(t, ctx, mgtClient, hostedCluster)
@@ -88,6 +93,9 @@ func TestKarpenter(t *testing.T) {
 		// rather than using the "default" class, because the instance-profile test mutates
 		// the default EC2NodeClass which would trigger NodeClassDrift on any NodeClaims referencing it.
 		t.Run("Parallel provisioning tests", func(t *testing.T) {
+			if hostedCluster.Spec.Platform.Type != hyperv1.AWSPlatform {
+				t.Skip("provisioning tests use AWS NodeClasses and EC2 instances")
+			}
 			t.Run("ARM64 instance provisioning", testARM64Provisioning(ctx, guestClient, hostedCluster))
 			t.Run("Instance profile annotation propagation", testInstanceProfileAnnotation(ctx, mgtClient, guestClient, hostedCluster, awsCredsFile, awsRegion))
 			t.Run("OpenshiftEC2NodeClass version field and MetadataOptions", testNodeClassVersionField(ctx, mgtClient, guestClient, hostedCluster, awsCredsFile, awsRegion, pullSecretFile))
@@ -151,10 +159,14 @@ func testKarpenterPlumbing(ctx context.Context, mgtClient, guestClient crclient.
 
 		t.Log("Validating Karpenter CRDs are installed")
 		expectedCRDs := []string{
-			"ec2nodeclasses.karpenter.k8s.aws",
-			"openshiftec2nodeclasses.karpenter.hypershift.openshift.io",
 			"nodepools.karpenter.sh",
 			"nodeclaims.karpenter.sh",
+		}
+		switch hostedCluster.Spec.Platform.Type {
+		case hyperv1.AWSPlatform:
+			expectedCRDs = append(expectedCRDs, "ec2nodeclasses.karpenter.k8s.aws", "openshiftec2nodeclasses.karpenter.hypershift.openshift.io")
+		case hyperv1.AzurePlatform:
+			expectedCRDs = append(expectedCRDs, "aksnodeclasses.karpenter.azure.com", "openshiftazurenodeclasses.karpenter.hypershift.openshift.io")
 		}
 		for _, crdName := range expectedCRDs {
 			e2eutil.EventuallyObject(t, ctx, fmt.Sprintf("CRD %s to exist in the guest cluster", crdName),
@@ -166,6 +178,27 @@ func testKarpenterPlumbing(ctx context.Context, mgtClient, guestClient crclient.
 				nil,
 				e2eutil.WithTimeout(2*time.Minute),
 			)
+		}
+
+		t.Log("Validating AutoNodeEnabled condition is set on HostedCluster")
+		e2eutil.EventuallyObject(t, ctx, fmt.Sprintf("HostedCluster %s/%s to have AutoNodeEnabled condition", hostedCluster.Namespace, hostedCluster.Name),
+			func(ctx context.Context) (*hyperv1.HostedCluster, error) {
+				hc := &hyperv1.HostedCluster{}
+				err := mgtClient.Get(ctx, crclient.ObjectKeyFromObject(hostedCluster), hc)
+				return hc, err
+			},
+			[]e2eutil.Predicate[*hyperv1.HostedCluster]{
+				e2eutil.ConditionPredicate[*hyperv1.HostedCluster](e2eutil.Condition{
+					Type:   string(hyperv1.AutoNodeEnabled),
+					Status: metav1.ConditionTrue,
+					Reason: hyperv1.AsExpectedReason,
+				}),
+			},
+			e2eutil.WithTimeout(2*time.Minute),
+		)
+
+		if hostedCluster.Spec.Platform.Type != hyperv1.AWSPlatform {
+			return
 		}
 
 		t.Log("Validating default OpenshiftEC2NodeClass exists with expected values")
@@ -243,23 +276,6 @@ func testKarpenterPlumbing(ctx context.Context, mgtClient, guestClient crclient.
 		ec2NodeClassCopy := ec2NodeClass.DeepCopy()
 		ec2NodeClassCopy.Spec.AMISelectorTerms = []awskarpenterv1.AMISelectorTerm{{ID: "ami-fake123"}}
 		g.Expect(guestClient.Update(ctx, ec2NodeClassCopy)).To(MatchError(ContainSubstring("EC2NodeClass resource can't be created/updated/deleted directly, please use OpenshiftEC2NodeClass resource instead")))
-
-		t.Log("Validating AutoNodeEnabled condition is set on HostedCluster")
-		e2eutil.EventuallyObject(t, ctx, fmt.Sprintf("HostedCluster %s/%s to have AutoNodeEnabled condition", hostedCluster.Namespace, hostedCluster.Name),
-			func(ctx context.Context) (*hyperv1.HostedCluster, error) {
-				hc := &hyperv1.HostedCluster{}
-				err := mgtClient.Get(ctx, crclient.ObjectKeyFromObject(hostedCluster), hc)
-				return hc, err
-			},
-			[]e2eutil.Predicate[*hyperv1.HostedCluster]{
-				e2eutil.ConditionPredicate[*hyperv1.HostedCluster](e2eutil.Condition{
-					Type:   string(hyperv1.AutoNodeEnabled),
-					Status: metav1.ConditionTrue,
-					Reason: hyperv1.AsExpectedReason,
-				}),
-			},
-			e2eutil.WithTimeout(2*time.Minute),
-		)
 	}
 }
 
@@ -1367,7 +1383,7 @@ func testAutoNodeLifecycle(ctx context.Context, mgtClient crclient.Client, hoste
 	return func(t *testing.T) {
 		g := NewWithT(t)
 
-		// Refresh to get current spec (including AutoNode config with RoleARN).
+		// Refresh to get the current AutoNode configuration.
 		err := mgtClient.Get(ctx, crclient.ObjectKeyFromObject(hostedCluster), hostedCluster)
 		g.Expect(err).NotTo(HaveOccurred())
 		savedAutoNode := hostedCluster.Spec.AutoNode
@@ -1448,6 +1464,9 @@ func testAutoNodeLifecycle(ctx context.Context, mgtClient crclient.Client, hoste
 
 func testBillingConsolidationAndPDB(ctx context.Context, mgtClient, guestClient crclient.Client, hostedCluster *hyperv1.HostedCluster) func(t *testing.T) {
 	return func(t *testing.T) {
+		if hostedCluster.Spec.Platform.Type != hyperv1.AWSPlatform {
+			t.Skip("billing and consolidation test uses an EC2NodeClass and t3.xlarge instances")
+		}
 		g := NewWithT(t)
 
 		// Before any Karpenter nodes are provisioned, Karpenter vCPUs should be 0.
