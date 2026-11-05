@@ -21,6 +21,7 @@ import (
 	karpenterv2 "github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/v2/karpenter"
 	karpenteroperatorv2 "github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/v2/karpenteroperator"
 	"github.com/openshift/hypershift/hypershift-operator/controllers/manifests/controlplaneoperator"
+	karpenteroperatoroverrides "github.com/openshift/hypershift/hypershift-operator/karpenteroperator-overrides"
 	"github.com/openshift/hypershift/pkg/manifests"
 	controlplanecomponent "github.com/openshift/hypershift/support/controlplane-component"
 	"github.com/openshift/hypershift/support/k8sutil"
@@ -73,11 +74,22 @@ func (r *HostedClusterReconciler) reconcileKarpenterOperator(cpContext controlpl
 		}
 	}
 
+	standaloneEnabled := karpenterutil.IsStandaloneKarpenterOperatorEnabled()
+	var karpenterOperatorImage string
+	if standaloneEnabled && karpenterutil.IsKarpenterEnabled(hcluster.Spec.AutoNode) {
+		var err error
+		karpenterOperatorImage, err = karpenteroperatoroverrides.Image()
+		if err != nil {
+			return fmt.Errorf("failed to load karpenter-operator image override: %w", err)
+		}
+	}
+
 	karpenteroperator := karpenteroperatorv2.NewComponent(&karpenteroperatorv2.KarpenterOperatorOptions{
 		HyperShiftOperatorImage:            hypershiftOperatorImage,
 		ControlPlaneOperatorImage:          controlPlaneOperatorImage,
+		KarpenterOperatorImage:             karpenterOperatorImage,
 		IgnitionEndpoint:                   hcluster.Status.IgnitionEndpoint,
-		StandaloneKarpenterOperatorEnabled: karpenterutil.IsStandaloneKarpenterOperatorEnabled(),
+		StandaloneKarpenterOperatorEnabled: standaloneEnabled,
 	})
 
 	// Always reconcile the Karpenter Operator so it has a chance to clean up, the predicate on

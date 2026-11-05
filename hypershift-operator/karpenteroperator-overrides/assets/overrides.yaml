@@ -1,0 +1,3 @@
+# Set to an ART-promoted HCP release image, pinned by digest.
+# Empty or absent overrides fall back to the hosted cluster's release payload.
+image: ""

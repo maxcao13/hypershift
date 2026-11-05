@@ -19,6 +19,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
@@ -507,6 +508,7 @@ func TestReconcileAutoNodeEnabledCondition(t *testing.T) {
 
 func TestReconcileKarpenterOperator(t *testing.T) {
 	tests := []struct {
+		standalone    bool
 		name          string
 		staleAutoNode hyperv1.AutoNodeStatus
 		wantAutoNode  hyperv1.AutoNodeStatus
@@ -521,11 +523,25 @@ func TestReconcileKarpenterOperator(t *testing.T) {
 			staleAutoNode: hyperv1.AutoNodeStatus{},
 			wantAutoNode:  hyperv1.AutoNodeStatus{},
 		},
+		{
+			name:          "When standalone mode is enabled and karpenter is disabled, it should clean up without deploying the operator",
+			standalone:    true,
+			staleAutoNode: hyperv1.AutoNodeStatus{NodeCount: ptr.To[int32](5)},
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			g := NewWithT(t)
+			if tc.standalone {
+				previousFeatureSet := featuregate.FeatureSet()
+				featuregate.ConfigureFeatureSet(string(configv1.TechPreviewNoUpgrade))
+				t.Cleanup(func() {
+					featuregate.ConfigureFeatureSet(string(previousFeatureSet))
+				})
+				t.Setenv(karpenterutil.EnableStandaloneKarpenterOperatorEnvVar, "1")
+				g.Expect(karpenterutil.IsStandaloneKarpenterOperatorEnabled()).To(BeTrue())
+			}
 			ctx := context.Background()
 
 			hcp := &hyperv1.HostedControlPlane{
@@ -570,6 +586,8 @@ func TestReconcileKarpenterOperator(t *testing.T) {
 			g.Expect(fakeClient.Get(ctx, crclient.ObjectKeyFromObject(hcp), updated)).To(Succeed())
 			g.Expect(updated.Status.AutoNode).To(Equal(tc.wantAutoNode),
 				"stale AutoNode status should be cleared when karpenter is disabled")
+			err = fakeClient.Get(ctx, crclient.ObjectKey{Namespace: hcp.Namespace, Name: karpenteroperatorv2.ComponentName}, &appsv1.Deployment{})
+			g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "disabled karpenter operator should not have a Deployment")
 		})
 	}
 }
