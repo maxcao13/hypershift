@@ -214,9 +214,12 @@ func (karp *KarpenterOperatorOptions) adaptStandaloneDeployment(cpContext compon
 		)
 	}
 	podspec.UpdateContainer(ComponentName, deployment.Spec.Template.Spec.Containers, func(c *corev1.Container) {
-		c.Image = cpContext.ReleaseImageProvider.GetImage(karpenterutil.KarpenterOperatorImageName)
-		if override, exists := hcp.Annotations[hyperkarpenterv1.KarpenterOperatorImage]; exists && override != "" {
+		if override := hcp.Annotations[hyperkarpenterv1.KarpenterOperatorImage]; override != "" {
 			c.Image = override
+		} else if karp.KarpenterOperatorImage != "" {
+			c.Image = karp.KarpenterOperatorImage
+		} else {
+			c.Image = cpContext.ReleaseImageProvider.GetImage(karpenterutil.KarpenterOperatorImageName)
 		}
 		if platformType == hyperv1.AWSPlatform {
 			c.VolumeMounts = append(c.VolumeMounts,

@@ -354,6 +354,7 @@ func TestAdaptDeployment(t *testing.T) {
 				HyperShiftOperatorImage:   tc.hyperShiftOperatorImage,
 				ControlPlaneOperatorImage: tc.controlPlaneOperatorImage,
 				IgnitionEndpoint:          tc.ignitionEndpoint,
+				KarpenterOperatorImage:    "quay.io/custom/karpenter-operator:test",
 			}
 
 			cpContext := controlplanecomponent.WorkloadContext{
@@ -401,7 +402,10 @@ func TestAddStandaloneAdapterContainer(t *testing.T) {
 }
 
 func TestAdaptStandaloneDeployment(t *testing.T) {
+	const pinnedImage = "registry.redhat.io/openshift4/karpenter-operator-rhel9@sha256:88c55ea554f7e62a64e34ff8d3be45ef85ef6b80fe4e9b0240b9a1aa226f9d98"
 	testCases := []struct {
+		pinnedImage    string
+		expectedImage  string
 		name           string
 		platformType   hyperv1.PlatformType
 		awsRegion      string
@@ -598,6 +602,45 @@ func TestAdaptStandaloneDeployment(t *testing.T) {
 			},
 		},
 		{
+			name:          "When an image is pinned, it should use the pin instead of the payload",
+			platformType:  hyperv1.AWSPlatform,
+			pinnedImage:   pinnedImage,
+			expectedImage: pinnedImage,
+			images: map[string]string{
+				karpenterutil.KarpenterOperatorImageName: "quay.io/openshift/karpenter-operator:latest",
+			},
+		},
+		{
+			name:          "When the payload lacks the operator image, it should use the pin",
+			platformType:  hyperv1.AWSPlatform,
+			pinnedImage:   pinnedImage,
+			expectedImage: pinnedImage,
+		},
+		{
+			name:          "When an annotation and pin are present, it should use the annotation",
+			platformType:  hyperv1.AWSPlatform,
+			pinnedImage:   pinnedImage,
+			expectedImage: "quay.io/custom/karpenter-operator:test",
+			hcpAnnotations: map[string]string{
+				hyperkarpenterv1.KarpenterOperatorImage: "quay.io/custom/karpenter-operator:test",
+			},
+		},
+		{
+			name:          "When the annotation is empty, it should use the pin",
+			platformType:  hyperv1.AWSPlatform,
+			pinnedImage:   pinnedImage,
+			expectedImage: pinnedImage,
+			hcpAnnotations: map[string]string{
+				hyperkarpenterv1.KarpenterOperatorImage: "",
+			},
+		},
+		{
+			name:          "When the platform is Azure, it should use the pin",
+			platformType:  hyperv1.AzurePlatform,
+			pinnedImage:   pinnedImage,
+			expectedImage: pinnedImage,
+		},
+		{
 			name:         "When HCP has empty KarpenterOperatorImage annotation, it should use the default image",
 			platformType: hyperv1.AWSPlatform,
 			awsRegion:    "us-west-2",
@@ -686,6 +729,7 @@ func TestAdaptStandaloneDeployment(t *testing.T) {
 				ControlPlaneOperatorImage:          "quay.io/hypershift/cpo:latest",
 				IgnitionEndpoint:                   "https://ignition.example.com",
 				StandaloneKarpenterOperatorEnabled: true,
+				KarpenterOperatorImage:             tc.pinnedImage,
 			}
 
 			cpContext := controlplanecomponent.WorkloadContext{
@@ -694,7 +738,16 @@ func TestAdaptStandaloneDeployment(t *testing.T) {
 				ReleaseImageProvider: &fakeReleaseImageProvider{images: tc.images},
 			}
 
-			tc.validateFunc(t, g, opts, cpContext)
+			if tc.expectedImage != "" {
+				deployment, err := assets.LoadDeploymentManifest(ComponentName)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(opts.adaptStandaloneDeployment(cpContext, deployment)).To(Succeed())
+				container := podspec.FindContainer(ComponentName, deployment.Spec.Template.Spec.Containers)
+				g.Expect(container).ToNot(BeNil())
+				g.Expect(container.Image).To(Equal(tc.expectedImage))
+			} else {
+				tc.validateFunc(t, g, opts, cpContext)
+			}
 		})
 	}
 }

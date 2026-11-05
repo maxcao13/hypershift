@@ -23,6 +23,7 @@ var _ component.ComponentOptions = &KarpenterOperatorOptions{}
 type KarpenterOperatorOptions struct {
 	HyperShiftOperatorImage            string
 	ControlPlaneOperatorImage          string
+	KarpenterOperatorImage             string
 	IgnitionEndpoint                   string
 	StandaloneKarpenterOperatorEnabled bool
 }
