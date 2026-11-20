@@ -13,6 +13,7 @@ import (
 	karpenteroperatoroverrides "github.com/openshift/hypershift/hypershift-operator/karpenteroperator-overrides"
 	"github.com/openshift/hypershift/support/config"
 	component "github.com/openshift/hypershift/support/controlplane-component"
+	"github.com/openshift/hypershift/support/imageregistry"
 	"github.com/openshift/hypershift/support/images"
 	karpenterutil "github.com/openshift/hypershift/support/karpenter"
 	"github.com/openshift/hypershift/support/podspec"
@@ -52,6 +53,7 @@ func (karp *KarpenterOperatorOptions) adaptDeployment(cpContext component.Worklo
 		)
 		proxy.SetEnvVars(&c.Env)
 		setIgnitionEnvVars(&c.Env)
+		karp.setRegistryOverrides(c)
 	})
 
 	switch hcp.Spec.Platform.Type {
@@ -111,6 +113,20 @@ func setIgnitionEnvVars(env *[]corev1.EnvVar) {
 	}
 	if controlplaneoperatoroverrides.IsOverridesEnabled() {
 		*env = append(*env, corev1.EnvVar{Name: controlplaneoperatoroverrides.CPOOverridesEnvVar, Value: "1"})
+	}
+}
+
+// setRegistryOverrides passes on the registry overrides of the HyperShift operator, so the
+// karpenter-operator looks up release images from the same registries.
+func (karp *KarpenterOperatorOptions) setRegistryOverrides(c *corev1.Container) {
+	if len(karp.RegistryOverrides) > 0 {
+		c.Args = append(c.Args, "--registry-overrides="+imageregistry.ConvertRegistryOverridesToCommandLineFlag(karp.RegistryOverrides))
+	}
+	if len(karp.OpenShiftRegistryOverrides) > 0 {
+		podspec.UpsertEnvVar(c, corev1.EnvVar{
+			Name:  "OPENSHIFT_IMG_OVERRIDES",
+			Value: imageregistry.ConvertOpenShiftImageRegistryOverridesToCommandLineFlag(karp.OpenShiftRegistryOverrides),
+		})
 	}
 }
 
@@ -326,6 +342,7 @@ func (karp *KarpenterOperatorOptions) addStandaloneAdapterContainer(deployment *
 			},
 		},
 	})
+	podspec.UpdateContainer(AdapterContainerName, deployment.Spec.Template.Spec.Containers, karp.setRegistryOverrides)
 
 	return nil
 }
