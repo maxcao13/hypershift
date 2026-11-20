@@ -9,6 +9,7 @@ import (
 
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	hyperkarpenterv1 "github.com/openshift/hypershift/api/karpenter/v1"
+	controlplaneoperatoroverrides "github.com/openshift/hypershift/hypershift-operator/controlplaneoperator-overrides"
 	karpenteroperatoroverrides "github.com/openshift/hypershift/hypershift-operator/karpenteroperator-overrides"
 	"github.com/openshift/hypershift/support/config"
 	component "github.com/openshift/hypershift/support/controlplane-component"
@@ -107,6 +108,9 @@ func (karp *KarpenterOperatorOptions) adaptDeployment(cpContext component.Worklo
 func setIgnitionEnvVars(env *[]corev1.EnvVar) {
 	if image := os.Getenv(images.SharedIngressHAProxyEnvVar); image != "" {
 		*env = append(*env, corev1.EnvVar{Name: images.SharedIngressHAProxyEnvVar, Value: image})
+	}
+	if controlplaneoperatoroverrides.IsOverridesEnabled() {
+		*env = append(*env, corev1.EnvVar{Name: controlplaneoperatoroverrides.CPOOverridesEnvVar, Value: "1"})
 	}
 }
 
