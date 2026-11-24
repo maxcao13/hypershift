@@ -3609,6 +3609,12 @@ func (r *reconciler) reconcileAzureCloudNodeManager(ctx context.Context, image s
 							Operator: corev1.TolerationOpExists,
 							Effect:   corev1.TaintEffectNoExecute,
 						},
+						// Run on unregistered Karpenter nodes to set their providerID.
+						{
+							Key:      "karpenter.sh/unregistered",
+							Operator: corev1.TolerationOpExists,
+							Effect:   corev1.TaintEffectNoExecute,
+						},
 					},
 					Containers: []corev1.Container{
 						{

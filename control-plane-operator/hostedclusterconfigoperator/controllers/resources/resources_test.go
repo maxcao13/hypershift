@@ -14,6 +14,7 @@ import (
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	cpomanifests "github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/manifests"
 	"github.com/openshift/hypershift/control-plane-operator/hostedclusterconfigoperator/api"
+	ccm "github.com/openshift/hypershift/control-plane-operator/hostedclusterconfigoperator/controllers/resources/cloudcontrollermanager/azure"
 	"github.com/openshift/hypershift/control-plane-operator/hostedclusterconfigoperator/controllers/resources/kas"
 	"github.com/openshift/hypershift/control-plane-operator/hostedclusterconfigoperator/controllers/resources/manifests"
 	"github.com/openshift/hypershift/hypershift-operator/controllers/nodepool"
@@ -3287,6 +3288,28 @@ func TestReconcileMetricsForwarder(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReconcileAzureCloudNodeManager(t *testing.T) {
+	t.Run("When Karpenter nodes are unregistered it should tolerate their NoExecute taint", func(t *testing.T) {
+		g := NewWithT(t)
+
+		guestClient := fake.NewClientBuilder().WithScheme(api.Scheme).Build()
+		r := &reconciler{
+			client:                 guestClient,
+			CreateOrUpdateProvider: &simpleCreateOrUpdater{},
+		}
+
+		g.Expect(r.reconcileAzureCloudNodeManager(t.Context(), "cloud-node-manager-image")).To(BeEmpty())
+
+		daemonSet := ccm.CloudNodeManagerDaemonSet()
+		g.Expect(guestClient.Get(t.Context(), client.ObjectKeyFromObject(daemonSet), daemonSet)).To(Succeed())
+		g.Expect(daemonSet.Spec.Template.Spec.Tolerations).To(ContainElement(corev1.Toleration{
+			Key:      "karpenter.sh/unregistered",
+			Operator: corev1.TolerationOpExists,
+			Effect:   corev1.TaintEffectNoExecute,
+		}))
+	})
 }
 
 func Test_namespacedNamePredicateFunc(t *testing.T) {
